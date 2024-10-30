@@ -440,7 +440,7 @@ class _Linear(torch.autograd.Function):
             else:
                 accumulate_wgrad_into_param_main_grad = ctx.fuse_wgrad_accumulation
 
-            if ctx.fp8:
+            if ctx.fp8 and not ctx.fp8_meta["recipe"].override_linear_precision.dgrad:
                 fp8_dtype_forward = get_fp8_te_dtype(ctx.fp8_meta["recipe"], fprop_tensor=True)
                 fp8_dtype_backward = get_fp8_te_dtype(ctx.fp8_meta["recipe"], fprop_tensor=False)
 

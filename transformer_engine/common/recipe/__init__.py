@@ -148,7 +148,9 @@ class DelayedScaling:
         assert self.override_linear_precision in (
             (False, False, False),
             (False, False, True),
-        ), "Only wgrad GEMM override is currently supported."
+            (False, True, True),	
+            (False, True, False),
+        ), "Only wgrad/dgrad GEMM override is currently supported."
         if self.interval >= 0:
             warnings.warn(
                 "`interval` argument is deprecated and unused. "
