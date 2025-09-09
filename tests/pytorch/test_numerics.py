@@ -2743,6 +2743,7 @@ def test_fp8_weight_on_demand_transpose():
 
     old_value = FP8GlobalStateManager.FP8_BLOCKWISE_WEIGHT_ON_DEMAND_TRANSPOSE
 
+    # 1. grouped linear module test
     FP8GlobalStateManager.FP8_BLOCKWISE_WEIGHT_ON_DEMAND_TRANSPOSE = False
 
     with fp8_model_init(enabled=True, recipe=fp8_recipe):
@@ -2805,8 +2806,100 @@ def test_fp8_weight_on_demand_transpose():
         False,
         False,
     )
-    FP8GlobalStateManager.FP8_BLOCKWISE_WEIGHT_ON_DEMAND_TRANSPOSE = old_value
 
-    # Shoule be bit-wise match
+    # should be bit-wise match
     for i, (o, o_ref) in enumerate(zip(outputs1, outputs2)):
         torch.testing.assert_close(o, o_ref, rtol=0, atol=0)
+
+
+    # 2. layernorm linear module test
+    FP8GlobalStateManager.FP8_BLOCKWISE_WEIGHT_ON_DEMAND_TRANSPOSE = False
+    with fp8_model_init(enabled=True, recipe=fp8_recipe):
+        te_ln_linear = TestReturnBiasModule(
+            LayerNormLinear,
+            in_features=config.hidden_size,
+            out_features=4 * config.hidden_size,
+            eps=config.eps,
+            normalization="RMSNorm",
+            params_dtype=dtype,
+            return_bias=False,
+            bias=False,
+            device="cuda",
+        )
+    assert te_ln_linear.te_module.weight._columnwise_data is not None
+
+    # Share params
+    weights_cache = []
+    with torch.no_grad():
+        weights_cache.append(
+            te_ln_linear.te_module.layer_norm_weight.clone()
+        )
+        weights_cache.append(te_ln_linear.te_module.weight.clone())
+    outputs1 = _test_granular_accuracy(te_ln_linear, bs, dtype, config, recipe=fp8_recipe)
+
+    FP8GlobalStateManager.FP8_BLOCKWISE_WEIGHT_ON_DEMAND_TRANSPOSE = True
+    with fp8_model_init(enabled=True, recipe=fp8_recipe):
+        te_ln_linear = TestReturnBiasModule(
+            LayerNormLinear,
+            in_features=config.hidden_size,
+            out_features=4 * config.hidden_size,
+            eps=config.eps,
+            normalization="RMSNorm",
+            params_dtype=dtype,
+            return_bias=False,
+            bias=False,
+            device="cuda",
+        )
+    assert te_ln_linear.te_module.weight._columnwise_data is None
+    # update params
+    te_ln_linear.te_module.layer_norm_weight = Parameter(weights_cache[0])
+    te_ln_linear.te_module.weight = Parameter(weights_cache[1])
+
+    outputs2 = _test_granular_accuracy(te_ln_linear, bs, dtype, config, recipe=fp8_recipe)
+
+    # should be bit-wise match
+    for i, (o, o_ref) in enumerate(zip(outputs1, outputs2)):
+        torch.testing.assert_close(o, o_ref, rtol=0, atol=0)
+
+
+    # 3. linear module test
+    FP8GlobalStateManager.FP8_BLOCKWISE_WEIGHT_ON_DEMAND_TRANSPOSE = False
+    with fp8_model_init(enabled=True, recipe=fp8_recipe):
+        te_linear = Linear(
+            config.hidden_size,
+            4 * config.hidden_size,
+            bias=False,
+            params_dtype=dtype,
+            device="cuda",
+            delay_wgrad_compute=False,
+            fuse_wgrad_accumulation=False,
+        ).eval()
+    assert te_linear.weight._columnwise_data is not None
+
+    # Share params
+    with torch.no_grad():
+        weights_cache = te_linear.weight.clone()
+
+    te_outputs1 = _test_granular_accuracy(te_linear, bs, dtype, config, delay_wgrad_compute=True, recipe=fp8_recipe)
+
+    FP8GlobalStateManager.FP8_BLOCKWISE_WEIGHT_ON_DEMAND_TRANSPOSE = True
+    with fp8_model_init(enabled=True, recipe=fp8_recipe):
+        te_linear = Linear(
+            config.hidden_size,
+            4 * config.hidden_size,
+            bias=False,
+            params_dtype=dtype,
+            device="cuda",
+            delay_wgrad_compute=False,
+            fuse_wgrad_accumulation=False,
+        ).eval()
+    assert te_linear.weight._columnwise_data is None
+
+    te_linear.weight = Parameter(weights_cache)
+    te_outputs2 = _test_granular_accuracy(te_linear, bs, dtype, config, delay_wgrad_compute=True, recipe=fp8_recipe)
+
+    # should be bit-wise match
+    for i, (o, o_ref) in enumerate(zip(outputs1, outputs2)):
+        torch.testing.assert_close(o, o_ref, rtol=0, atol=0)
+
+    FP8GlobalStateManager.FP8_BLOCKWISE_WEIGHT_ON_DEMAND_TRANSPOSE = old_value
