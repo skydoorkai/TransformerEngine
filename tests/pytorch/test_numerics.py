@@ -2738,10 +2738,14 @@ def test_fp8_weight_on_demand_transpose():
     dtype = torch.bfloat16
     num_gemms = 4
     bs = 4
-    recipe = recipe.Float8BlockScaling()
-    config = model_configs["128m"]
+    fp8_recipe = recipe.Float8BlockScaling()
+    config = model_configs["126m"]
 
-    with fp8_model_init(enabled=True, recipe=recipe):
+    old_value = FP8GlobalStateManager.FP8_BLOCKWISE_WEIGHT_ON_DEMAND_TRANSPOSE
+
+    FP8GlobalStateManager.FP8_BLOCKWISE_WEIGHT_ON_DEMAND_TRANSPOSE = False
+
+    with fp8_model_init(enabled=True, recipe=fp8_recipe):
         grouped_linear = GroupedLinear(
             num_gemms,
             config.hidden_size,
@@ -2750,47 +2754,59 @@ def test_fp8_weight_on_demand_transpose():
             params_dtype=dtype,
             device="cuda",
         ).eval()
-        sequential_linear = torch.nn.ModuleList(
-            [
-                Linear(
-                    config.hidden_size,
-                    4 * config.hidden_size,
-                    bias=False,
-                    params_dtype=dtype,
-                    device="cuda",
-                ).eval()
-                for _ in range(num_gemms)
-            ]
-        )
 
     # Share params
     with torch.no_grad():
-        for i in range(num_gemms):
-            sequential_linear[i].weight = Parameter(getattr(grouped_linear, f"weight{i}").clone())
+        weights_cache = [Parameter(getattr(grouped_linear, f"weight{i}").clone()) for i in range(num_gemms)]
 
-    outputs_ref = _test_grouped_linear_accuracy(
-        sequential_linear,
-        num_gemms,
-        bs,
-        dtype,
-        config,
-        recipe,
-        True,
-        False,
-        False,
-    )
-    outputs = _test_grouped_linear_accuracy(
+    for i in range(num_gemms):
+        assert getattr(grouped_linear, f"weight{i}")._columnwise_data is not None
+
+    outputs1 = _test_grouped_linear_accuracy(
         grouped_linear,
         num_gemms,
         bs,
         dtype,
         config,
-        recipe,
+        fp8_recipe,
         True,
         False,
         False,
     )
 
+    FP8GlobalStateManager.FP8_BLOCKWISE_WEIGHT_ON_DEMAND_TRANSPOSE = True
+
+    with fp8_model_init(enabled=True, recipe=fp8_recipe):
+        grouped_linear = GroupedLinear(
+            num_gemms,
+            config.hidden_size,
+            4 * config.hidden_size,
+            bias=False,
+            params_dtype=dtype,
+            device="cuda",
+        ).eval()
+
+    # Share params
+    with torch.no_grad():
+        for i in range(num_gemms):
+            w = getattr(grouped_linear, f"weight{i}")
+            assert w._columnwise_data is None
+            w._rowwise_data = weights_cache[i]._rowwise_data
+            w._rowwise_scale_inv = weights_cache[i]._rowwise_scale_inv
+
+    outputs2 = _test_grouped_linear_accuracy(
+        grouped_linear,
+        num_gemms,
+        bs,
+        dtype,
+        config,
+        fp8_recipe,
+        True,
+        False,
+        False,
+    )
+    FP8GlobalStateManager.FP8_BLOCKWISE_WEIGHT_ON_DEMAND_TRANSPOSE = old_value
+
     # Shoule be bit-wise match
-    for i, (o, o_ref) in enumerate(zip(outputs, outputs_ref)):
+    for i, (o, o_ref) in enumerate(zip(outputs1, outputs2)):
         torch.testing.assert_close(o, o_ref, rtol=0, atol=0)

@@ -12,7 +12,6 @@ import torch
 import transformer_engine_torch as tex
 
 from transformer_engine.common.recipe import Recipe
-from transformer_engine.pytorch.tensor.float8_blockwise_tensor import get_columnwise_fp8_tensor
 from .base import (
     get_multi_stream_cublas_workspace,
     TransformerEngineBaseModule,
@@ -50,6 +49,7 @@ from ..tensor.quantized_tensor import (
     prepare_for_saving,
     restore_from_saved,
 )
+from transformer_engine.pytorch.tensor.float8_blockwise_tensor import get_columnwise_fp8_tensor
 
 __all__ = ["GroupedLinear"]
 
@@ -667,10 +667,6 @@ class GroupedLinear(TransformerEngineBaseModule):
 
         if self.primary_weights_in_fp8:
             self.init_fp8_metadata(num_gemms=self.num_gemms)
-            if FP8GlobalStateManager.is_blockwise_fp8_weight_on_demand_transpose():
-                # set weight quantizers to disable columnwise_usage
-                for i in range(self.num_gemms):
-                    self.quantizers['scaling_fwd'][self._offsets["weight"] + i * self._num_fp8_tensors_per_gemm["fwd"]].columnwise_usage = False
 
         self.reset_parameters(defer_init=device == "meta")
 

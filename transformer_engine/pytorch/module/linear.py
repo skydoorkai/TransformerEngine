@@ -14,7 +14,6 @@ import transformer_engine_torch as tex
 
 from transformer_engine.common.recipe import Recipe
 from transformer_engine.pytorch import torch_version
-from transformer_engine.pytorch.tensor.float8_blockwise_tensor import get_columnwise_fp8_tensor
 
 from .base import (
     fill_userbuffers_buffer_for_all_gather,
@@ -69,6 +68,7 @@ from ..tensor.mxfp8_tensor import MXFP8Quantizer
 from ..export import is_in_onnx_export_mode, assert_warmed_up
 from ..cpu_offload import is_cpu_offload_enabled, mark_activation_offload
 from ...debug.pytorch.debug_state import TEDebugState
+from transformer_engine.pytorch.tensor.float8_blockwise_tensor import get_columnwise_fp8_tensor
 
 __all__ = ["Linear"]
 
@@ -1296,9 +1296,6 @@ class Linear(TransformerEngineBaseModule):
 
         if with_fp8_params:
             self.init_fp8_metadata()
-            if FP8GlobalStateManager.is_blockwise_fp8_weight_on_demand_transpose():
-                # set weight quantizer columnwise_usage to False
-                self.quantizers['scaling_fwd'][tex.FP8FwdTensors.GEMM1_WEIGHT].columnwise_usage = False
 
         self.reset_parameters(defer_init=device == "meta")
 
